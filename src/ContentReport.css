@@ -1,0 +1,102 @@
+/* דיווח על בעיות תוכן */
+
+/* הסתרת השדה הראשון בחלון mw.Feedback (נשמר מהגרסה הקודמת) */
+.mw-feedbackDialog-feedback-form .oo-ui-fieldLayout-align-left:first-of-type {
+	display: none;
+}
+
+/* ---------- הכפתור הצף ---------- */
+
+#buttonFeedback .oo-ui-buttonElement-button {
+	position: fixed;
+	margin-right: 0;
+	bottom: 8%;
+	width: 60px;
+	height: 60px;
+	border-radius: 50%;
+	cursor: pointer;
+	box-shadow: 0 4px 8px rgba( 0, 0, 0, 0.3 );
+	z-index: 100;
+}
+
+.mw-body #buttonFeedback .oo-ui-buttonElement-button {
+	left: 5%;
+}
+
+/* הסמל מוחלף רק בכפתור הזה (בגרסה הקודמת הוחלף בכל האתר) */
+#buttonFeedback .oo-ui-iconElement-icon.oo-ui-icon-speechBubble {
+	background-image: url( /w/upload/michlol/2/23/Bad_content.svg );
+	background-size: 1.8em;
+}
+
+@media print {
+	#buttonFeedback {
+		display: none;
+	}
+}
+
+/* ---------- חלון הדיווח ---------- */
+
+.hm-report-help {
+	margin-top: 4px;
+	color: var( --color-subtle, #54595d );
+	font-size: 0.875em;
+}
+
+.hm-report-images {
+	max-height: 230px;
+	overflow-y: auto;
+}
+
+.hm-report-image {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	vertical-align: middle;
+}
+
+.hm-report-image img {
+	width: 48px;
+	height: 48px;
+	object-fit: cover;
+	border: 1px solid var( --border-color-base, #a2a9b1 );
+	border-radius: 2px;
+	background-color: var( --background-color-interactive-subtle, #f8f9fa );
+}
+
+.hm-report-image-name {
+	word-break: break-word;
+}
+
+.hm-report-anon {
+	margin-top: 8px;
+	padding-inline-start: 12px;
+	border-inline-start: 3px solid var( --border-color-base, #a2a9b1 );
+}
+
+.hm-report-anon > .oo-ui-messageWidget,
+.hm-report-anon > .oo-ui-progressBarWidget {
+	margin-top: 8px;
+}
+
+.hm-report-captcha img {
+	display: block;
+	max-width: 100%;
+	margin-bottom: 8px;
+}
+
+.hm-report-captcha p {
+	margin: 0 0 8px;
+}
+
+.hm-report-notice {
+	margin-top: 16px;
+}
+
+.hm-report-done p {
+	margin: 0 0 12px;
+}
+
+.hm-report-small {
+	font-size: 0.875em;
+}

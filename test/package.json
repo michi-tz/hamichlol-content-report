@@ -1,0 +1,7 @@
+{
+  "name": "content-report-smoke-test",
+  "private": true,
+  "description": "בדיקת עשן לגאדג'ט בדפדפן, עם סביבת MediaWiki מדומה",
+  "scripts": { "test": "node smoke.js", "lint:es2017": "node -e \"require('acorn').parse(require('fs').readFileSync('../src/ContentReport.js','utf8'),{ecmaVersion:2017});console.log('ES2017 OK')\"" },
+  "dependencies": { "acorn": "^8.14.0", "jquery": "^3.7.1", "oojs": "^7.0.1", "oojs-ui": "^0.54.2", "playwright": "^1.48.0" }
+}
