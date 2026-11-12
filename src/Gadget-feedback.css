@@ -1,16 +1,17 @@
-/* דיווח על בעיות תוכן */
+/* דיווח על בעיות תוכן (MediaWiki:Gadget-feedback.css) */
 
 /* הסתרת השדה הראשון בחלון mw.Feedback (נשמר מהגרסה הקודמת) */
 .mw-feedbackDialog-feedback-form .oo-ui-fieldLayout-align-left:first-of-type {
 	display: none;
 }
 
-/* ---------- הכפתור הצף ---------- */
+/* ---------- הכפתור הצף (Vector-2022 ו-Minerva) ---------- */
 
 #buttonFeedback .oo-ui-buttonElement-button {
 	position: fixed;
-	margin-right: 0;
+	left: 5%;
 	bottom: 8%;
+	margin-right: 0;
 	width: 60px;
 	height: 60px;
 	border-radius: 50%;
@@ -19,11 +20,7 @@
 	z-index: 100;
 }
 
-.mw-body #buttonFeedback .oo-ui-buttonElement-button {
-	left: 5%;
-}
-
-/* הסמל מוחלף רק בכפתור הזה (בגרסה הקודמת הוחלף בכל האתר) */
+/* הסמל מוחלף רק בכפתור הזה */
 #buttonFeedback .oo-ui-iconElement-icon.oo-ui-icon-speechBubble {
 	background-image: url( /w/upload/michlol/2/23/Bad_content.svg );
 	background-size: 1.8em;
@@ -36,12 +33,6 @@
 }
 
 /* ---------- חלון הדיווח ---------- */
-
-.hm-report-help {
-	margin-top: 4px;
-	color: var( --color-subtle, #54595d );
-	font-size: 0.875em;
-}
 
 .hm-report-images {
 	max-height: 230px;
@@ -68,29 +59,43 @@
 	word-break: break-word;
 }
 
-.hm-report-anon {
+.hm-report-anon,
+.hm-report-captcha {
 	margin-top: 8px;
 	padding-inline-start: 12px;
 	border-inline-start: 3px solid var( --border-color-base, #a2a9b1 );
 }
 
 .hm-report-anon > .oo-ui-messageWidget,
-.hm-report-anon > .oo-ui-progressBarWidget {
+.hm-report-captcha > .oo-ui-messageWidget {
 	margin-top: 8px;
 }
 
-.hm-report-captcha img {
+.hm-report-captcha-question img {
 	display: block;
 	max-width: 100%;
 	margin-bottom: 8px;
 }
 
-.hm-report-captcha p {
+.hm-report-captcha-question p {
 	margin: 0 0 8px;
+}
+
+.hm-report-captcha-widget {
+	margin-top: 8px;
+	max-width: 100%;
+	overflow-x: auto;
 }
 
 .hm-report-notice {
 	margin-top: 16px;
+}
+
+/* הודעות inline של OOUI מודגשות כברירת מחדל; כאן הן הסבר רגיל */
+.hm-report-notice .oo-ui-labelElement-label,
+.hm-report-anon > .oo-ui-messageWidget .oo-ui-labelElement-label,
+.hm-report-captcha > .oo-ui-messageWidget .oo-ui-labelElement-label {
+	font-weight: normal;
 }
 
 .hm-report-done p {
@@ -99,4 +104,15 @@
 
 .hm-report-small {
 	font-size: 0.875em;
+}
+
+/* מסגרת אימות האבטחה (Cloudflare) בדיווח אנונימי */
+.hm-report-challenge {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	height: 320px;
+	margin-top: 8px;
+	border: 1px solid var( --border-color-base, #a2a9b1 );
+	background-color: #fff;
 }
