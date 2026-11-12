@@ -76,9 +76,12 @@ async function openPage( opts ) {
 	const ctx = await browser.newContext( { viewport: { width: 1000, height: 900 }, deviceScaleFactor: 2 } );
 	ctx.setDefaultTimeout( 5000 );
 	const p = await ctx.newPage();
-	const env = { p, ctx, errors: [], posts: [], contactGets: 0, contact: opts.contact || 'none', postResponses: opts.postResponses || [] };
+	const env = { p, ctx, errors: [], posts: [], contactGets: 0, contact: opts.contact || 'none', challenge: opts.challenge || null, cleared: !!opts.cleared, frameLoads: 0, blockedGets: 0, frameQuery: '', postResponses: opts.postResponses || [] };
 	p.on( 'pageerror', ( e ) => env.errors.push( e.message ) );
-	p.on( 'console', ( m ) => { if ( m.type() === 'error' || m.type() === 'warning' ) env.errors.push( m.text() ); } );
+	// הודעות "Failed to load resource: 403" של הדפדפן על טופס יצירת הקשר הן צפויות (אימות Cloudflare או דף שגיאה),
+	// ולכן לא נחשבות לשגיאה. כל הודעה אחרת, וכל 403 על כתובת אחרת, כן נחשבות.
+	const expected403 = ( m ) => /status of 403/.test( m.text() ) && /\/wiki\/Special:Contact|\/w\/index\.php/.test( decodeURIComponent( m.location().url || '' ) );
+	p.on( 'console', ( m ) => { if ( ( m.type() === 'error' || m.type() === 'warning' ) && !expected403( m ) ) env.errors.push( m.text() ); } );
 	await p.route( '**/*', async ( route ) => {
 		const req = route.request();
 		const u = new URL( req.url() );
@@ -90,13 +93,32 @@ async function openPage( opts ) {
 		if ( pn.startsWith( '/src/' ) ) return route.fulfill( { path: path.join( SRC, pn.slice( 5 ) ) } );
 		if ( pn === '/mwstub.js' ) return route.fulfill( { path: path.join( __dirname, 'mwstub.js' ) } );
 		if ( pn.startsWith( '/w/upload/' ) ) return route.fulfill( { contentType: 'image/svg+xml', body: svg( pn.includes( 'family' ) ? '#7a9' : pn.includes( 'Map' ) ? '#c96' : '#69c' ) } );
+		if ( pn === '/wiki/Special:Contact' && env.challenge ) {
+			// דף הביניים של Cloudflare: טעינה במסגרת "עוברת" את האימות (אם clearable), בקשת רקע נחסמת עד אז
+			if ( req.isNavigationRequest() ) {
+				env.frameLoads++;
+				env.frameQuery = u.search;
+				if ( req.frame() !== p.mainFrame() && env.challenge === 'clearable' ) env.cleared = true;
+				return route.fulfill( { status: env.cleared && req.frame() === p.mainFrame() ? 200 : 403, contentType: 'text/html', body: '<html><head><title>Just a moment...</title></head><body>בודק את הדפדפן…</body></html>' } );
+			}
+			if ( !env.cleared ) {
+				env.blockedGets++;
+				return route.fulfill( { status: 403, contentType: 'text/html', headers: { 'cf-mitigated': 'challenge' }, body: '<html><head><title>Just a moment...</title></head><body></body></html>' } );
+			}
+		}
 		if ( pn === '/wiki/Special:Contact' ) {
 			env.contactGets++;
-			return route.fulfill( { contentType: 'text/html', body: env.contact === 'errorpage' ? CONTACT_ERROR_PAGE : contactForm( env.contact ) } );
+			// דף שגיאה של מדיה-ויקי מוחזר עם 403, כמו בחסימה: אסור שיזוהה כאימות של Cloudflare
+			return route.fulfill( env.contact === 'errorpage' ? { status: 403, contentType: 'text/html', body: CONTACT_ERROR_PAGE } : { contentType: 'text/html', body: contactForm( env.contact ) } );
 		}
 		if ( pn === '/w/index.php' && req.method() === 'POST' ) {
 			env.posts.push( new URLSearchParams( req.postData() ) );
 			const r = env.postResponses.shift() || 'ok';
+			if ( r === 'challenge' ) {
+				// פג תוקף אישור המעבר: Cloudflare מחזיר את דף הביניים גם ל-POST
+				env.cleared = false;
+				return route.fulfill( { status: 403, contentType: 'text/html', headers: { 'cf-mitigated': 'challenge' }, body: '<html><head><title>Just a moment...</title></head><body></body></html>' } );
+			}
 			return route.fulfill( { contentType: 'text/html', body: r === 'ok' ? CONTACT_OK : contactForm( env.contact, r ) } );
 		}
 		if ( pn.startsWith( '/wiki/' ) ) return route.fulfill( { contentType: 'text/html', body: '<html><body>דף</body></html>' } );
@@ -413,8 +435,11 @@ const EXTRA = { bot: true, watchlist: 'watch' };
 		const err = await H.errors( p );
 		check( err.text.includes( 'האימות נכשל, נסו שוב.' ), 'השגיאה מהתשובה מוצגת', err.text );
 		check( !err.text.includes( 'נדרש JavaScript' ), 'בלי הודעת noscript' );
+		for ( let i = 0; i < 50 && env.contactGets < 2; i++ ) await sleep( 50 );
 		check( env.contactGets === 2, 'הטופס נטען מחדש', env.contactGets );
+		await sleep( 200 );
 		check( await p.$eval( '.hm-report-captcha input', ( e ) => e.value ) === '', 'התשובה נמחקה' );
+		check( !err.retry, 'בלי "נסו שוב" (צריך לענות על שאלה חדשה)' );
 		check( env.posts[ 0 ].get( 'wpCaptchaWord' ) === '8' && env.posts[ 0 ].get( 'wpCaptchaId' ) === '12345', 'נשלחו wpCaptchaWord/Id' );
 		check( env.posts[ 0 ].get( 'wpFromAddress' ) === '' && !env.posts[ 0 ].has( 'wpCCme' ), 'בלי דוא"ל ובלי עותק' );
 		await p.click( '.oo-ui-processDialog-errors-actions .oo-ui-buttonWidget >> nth=0' );
@@ -431,6 +456,109 @@ const EXTRA = { bot: true, watchlist: 'watch' };
 		await H.anon( p );
 		await p.waitForSelector( '.hm-report-anon .oo-ui-messageWidget:has-text("מושבתת")', { timeout: 3000 } );
 		check( !await H.submitEnabled( p ), 'שליחה מושבתת' );
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'דף שגיאה (403) של מדיה-ויקי אינו מזוהה כאימות' );
+	} );
+
+	await test( '(m) אימות Cloudflare: מסגרת בחלון, ואחרי האימות הטופס נטען והדיווח נשלח', { challenge: 'clearable', config: { wgUserName: null } }, async ( p, check, env ) => {
+		await H.open( p );
+		await H.type( p, 'טעות' );
+		await H.text( p, 'שנת הלידה שגויה, צריך 1879' );
+		await H.anon( p );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'visible' } );
+		check( !await H.submitEnabled( p ), 'מושבת בזמן האימות' );
+		check( await p.isVisible( '.hm-report-anon .oo-ui-messageWidget:has-text("אימות אבטחה")' ), 'הסבר על האימות' );
+		await H.shot( p, 'form-challenge.png' );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'detached', timeout: 8000 } );
+		check( env.blockedGets >= 1 && env.frameLoads === 1, 'בקשת הרקע נחסמה והמסגרת נטענה פעם אחת', [ env.blockedGets, env.frameLoads ] );
+		check( await H.submitEnabled( p ), 'פעיל אחרי האימות' );
+		await H.submit( p );
+		await H.done( p );
+		check( env.posts.length === 1 && env.posts[ 0 ].get( 'wpText' ).includes( 'דף: אלברט איינשטיין' ), 'הדיווח נשלח ב-POST' );
+		check( ( await H.calls( p ) ).length === 0, 'לא נקרא newSection' );
+	} );
+
+	await test( '(m2) אימות Cloudflare שלא עובר: גיבוי — טופס ממולא בלשונית חדשה', { challenge: 'stuck', config: { wgUserName: null } }, async ( p, check, env ) => {
+		await p.clock.install();
+		await H.open( p );
+		await H.type( p, 'טעות' );
+		await H.text( p, 'שנת הלידה שגויה, צריך 1879' );
+		await H.anon( p );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'visible' } );
+		for ( let i = 0; i < 35 && await p.$( 'iframe.hm-report-challenge' ); i++ ) {
+			await p.clock.runFor( 2000 );
+			await sleep( 50 );
+		}
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'המסגרת הוסרה אחרי שהזמן עבר' );
+		check( await p.isVisible( '.hm-report-anon .oo-ui-messageWidget:has-text("בלשונית חדשה")' ), 'הסבר על הגיבוי' );
+		await p.fill( 'input[type=email]', 'me@example.com' );
+		await p.clock.runFor( 200 );
+		await p.evaluate( () => { window.open = ( url, target ) => { window.__opened = { url, target }; return {}; }; } );
+		await H.submit( p );
+		await p.clock.runFor( 1000 );
+		const opened = await p.evaluate( () => window.__opened );
+		check( !!opened && opened.target === '_blank', 'נפתחה לשונית חדשה', opened );
+		const tabUrl = new URL( opened ? opened.url : '/', ORIGIN );
+		const q = tabUrl.searchParams;
+		check( decodeURIComponent( tabUrl.pathname ) === '/wiki/Special:Contact', 'הלשונית נפתחה בדף יצירת הקשר', tabUrl.href );
+		check( q.get( 'wpSubject' ) === 'דיווח אנונימי — טעות: אלברט איינשטיין', 'נושא ממולא', q.get( 'wpSubject' ) );
+		check( ( q.get( 'wpText' ) || '' ).includes( 'פרטי הדיווח:\nשנת הלידה שגויה, צריך 1879' ), 'תוכן ממולא', q.get( 'wpText' ) );
+		check( q.get( 'wpFromAddress' ) === 'me@example.com', 'דוא"ל ממולא' );
+		await p.clock.runFor( 1000 );
+		const done = await p.$eval( '.hm-report-done', ( e ) => e.innerText );
+		check( done.includes( 'עדיין לא נשלח' ) && done.includes( 'בלשונית חדשה' ), 'מסך הסיום מבהיר שצריך לשלוח בלשונית', done );
+		const link = await p.$eval( '.hm-report-done a', ( e ) => ( { href: e.getAttribute( 'href' ), target: e.getAttribute( 'target' ) } ) );
+		check( link.href === ( opened && opened.url ) && link.target === '_blank', 'קישור לטופס הממולא, למקרה שהלשונית נחסמה', link );
+		check( !await p.isVisible( '.oo-ui-processDialog-actions-primary .oo-ui-actionWidget:has-text("מעבר לדיווח")' ), 'אין "מעבר לדיווח"' );
+		check( env.posts.length === 0, 'לא נשלח POST מהחלון' );
+	} );
+
+	await test( '(m3) תוקף האימות פג בזמן השליחה: חזרה לאימות בחלון, הטקסט נשמר, והשליחה החוזרת עוברת', {
+		challenge: 'clearable', cleared: true, postResponses: [ 'challenge', 'ok' ], config: { wgUserName: null },
+	}, async ( p, check, env ) => {
+		await H.open( p );
+		await H.type( p, 'טעות' );
+		await H.text( p, 'שנת הלידה שגויה, צריך 1879' );
+		await H.anon( p );
+		check( await H.submitEnabled( p ) || ( await sleep( 300 ), await H.submitEnabled( p ) ), 'הטופס נטען בלי אימות (אישור מעבר תקף)' );
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'אין מסגרת כשאין אימות' );
+		await H.submit( p );
+		const err = await H.errors( p );
+		check( err.text.includes( 'תוקף אימות האבטחה פג' ), 'הסבר על האימות שפג', err.text );
+		check( !err.retry, 'בלי "נסו שוב" — קודם משלימים את האימות' );
+		await p.click( '.oo-ui-processDialog-errors-actions .oo-ui-buttonWidget >> nth=0' );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'attached' } );
+		check( !await H.submitEnabled( p ), 'מושבת בזמן האימות' );
+		check( await p.$eval( '.oo-ui-processDialog-content textarea:not([aria-hidden="true"])', ( e ) => e.value ) === 'שנת הלידה שגויה, צריך 1879', 'הטקסט נשמר' );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'detached', timeout: 8000 } );
+		check( await H.submitEnabled( p ), 'פעיל אחרי האימות' );
+		await H.submit( p );
+		await H.done( p );
+		check( env.posts.length === 2 && env.posts[ 1 ].get( 'wpText' ).includes( 'שנת הלידה שגויה, צריך 1879' ), 'השליחה השנייה עברה עם הטקסט', env.posts.length );
+	} );
+
+	await test( '(m4) ביטול הסימון או סגירת החלון בזמן האימות: המסגרת נעלמת והבדיקות נעצרות', { challenge: 'stuck', config: { wgUserName: null } }, async ( p, check, env ) => {
+		await H.open( p );
+		await H.type( p, 'טעות' );
+		await H.text( p, 'שנת הלידה שגויה, צריך 1879' );
+		await H.anon( p );
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'attached' } );
+		await sleep( 2500 ); // לפחות סבב בדיקה אחד
+		await H.anon( p ); // ביטול הסימון
+		await sleep( 100 );
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'המסגרת הוסרה בביטול הסימון' );
+		let before = env.blockedGets;
+		await sleep( 4500 );
+		check( env.blockedGets === before, 'אין עוד בדיקות אחרי ביטול הסימון', [ before, env.blockedGets ] );
+		await H.anon( p ); // סימון מחדש, ואז סגירת החלון
+		await p.waitForSelector( 'iframe.hm-report-challenge', { state: 'attached' } );
+		await p.click( '.oo-ui-processDialog-actions-safe .oo-ui-actionWidget:visible' );
+		await sleep( 500 );
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'המסגרת הוסרה בסגירה' );
+		before = env.blockedGets;
+		await sleep( 4500 );
+		check( env.blockedGets === before, 'אין עוד בדיקות אחרי הסגירה', [ before, env.blockedGets ] );
+		await H.open( p );
+		check( !await p.$( 'iframe.hm-report-challenge' ), 'אין מסגרת בפתיחה מחדש' );
 	} );
 
 	await test( '(k) משתמש לא רשום: "אנונימי" לא מסומן ויש אזהרת IP', { config: { wgUserName: null } }, async ( p, check ) => {

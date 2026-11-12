@@ -29,6 +29,9 @@
 			formType: '', // סוג הטופס ב-$wgContactConfig ('' = טופס ברירת המחדל)
 			fields: { subject: 'wpSubject', text: 'wpText', name: 'wpFromName', email: 'wpFromAddress', ccMe: 'wpCCme' },
 			infoPage: 'המכלול:יצירת קשר',
+			// אימות האבטחה של Cloudflare לפני הטופס: כל כמה זמן לבדוק אם עבר, ועד מתי לחכות (מילישניות)
+			challengeInterval: 2000,
+			challengeTimeout: 60000,
 		},
 		// קאפצ'ות שמוצגות כרכיב: type = edit.captcha.type ב-API, className = מחלקת הרכיב בטופס,
 		// script = כתובת הסקריפט (רינדור מפורש), field = שם השדה של האסימון, global = האובייקט שהסקריפט יוצר
@@ -121,6 +124,23 @@
 
 	const contactTitle = () => CONFIG.contact.specialPage + ( CONFIG.contact.formType ? `/${ CONFIG.contact.formType }` : '' );
 
+	/** טופס יצירת הקשר ממולא מראש בפרטי הדיווח (HTMLForm קורא ערכים התחלתיים מהכתובת) */
+	const prefilledContactUrl = ( mail, email ) => {
+		const f = CONFIG.contact.fields;
+		const query = { [ f.subject ]: mail.subject, [ f.text ]: mail.text };
+		if ( email ) {
+			query[ f.email ] = email;
+		}
+		return mw.util.getUrl( contactTitle(), query );
+	};
+
+	/**
+	 * דף הביניים של Cloudflare ("Just a moment…"): כותרת cf-mitigated, או 403/503 בלי תוכן של מדיה-ויקי.
+	 * דף שגיאה של מדיה-ויקי (למשל חסימה, שגם הוא 403) אינו אימות, ומוצג כרגיל.
+	 */
+	const isChallenge = ( res, doc ) => res.headers.get( 'cf-mitigated' ) === 'challenge' ||
+		( ( res.status === 403 || res.status === 503 ) && !doc.querySelector( '#mw-content-text' ) );
+
 	const findContactForm = ( doc ) => {
 		const field = doc.querySelector( `form [name="${ CONFIG.contact.fields.text }"]` );
 		return field ? field.closest( 'form' ) : null;
@@ -155,6 +175,10 @@
 		const res = await fetch( mw.util.getUrl( contactTitle() ), { credentials: 'same-origin' } );
 		const doc = parseHtml( await res.text() );
 		const form = findContactForm( doc );
+		if ( !form && isChallenge( res, doc ) ) {
+			// בקשת רקע לא יכולה לעבור את האימות; רק דף שנטען בדפדפן (במסגרת)
+			return { status: 'challenge' };
+		}
 		if ( !form ) {
 			// דף שגיאה: חסימה, דרישת כניסה לחשבון, שליחת דוא"ל מושבתת וכו'
 			const content = doc.querySelector( '#mw-content-text' );
@@ -373,6 +397,7 @@
 				const isFilePage = getPageTitle().getNamespaceId() === 6;
 				this.contact = { status: 'idle' };
 				this.contactRequest = this.editCaptcha = this.trackUrl = null;
+				this.removeChallenge();
 				this.captcha.clear();
 				this.captcha.setNote( '' );
 				this.formPanel.toggle( true );
@@ -400,6 +425,14 @@
 		ReportDialog.prototype.getReadyProcess = function ( data ) {
 			return ReportDialog.super.prototype.getReadyProcess.call( this, data ).next( function () {
 				this.textInput.focus();
+			}, this );
+		};
+
+		ReportDialog.prototype.getTeardownProcess = function ( data ) {
+			return ReportDialog.super.prototype.getTeardownProcess.call( this, data ).first( function () {
+				// עצירת בדיקות האימות שרצות ברקע
+				this.contactRequest = null;
+				this.removeChallenge();
 			}, this );
 		};
 
@@ -440,7 +473,7 @@
 			if ( !this.getType() || ( !this.textOptional() && this.textInput.getValue().trim().length < CONFIG.minTextLength ) ) {
 				return false;
 			}
-			if ( this.anonInput.isSelected() && ( this.contact.status !== 'ready' || ( email && !EMAIL_RE.test( email ) ) ) ) {
+			if ( this.anonInput.isSelected() && ( ![ 'ready', 'fallback' ].includes( this.contact.status ) || ( email && !EMAIL_RE.test( email ) ) ) ) {
 				return false;
 			}
 			return !this.captcha.mode || !!this.captcha.getAnswer();
@@ -459,9 +492,15 @@
 			const email = this.emailInput.getValue().trim();
 			this.emailField.setErrors( email && !EMAIL_RE.test( email ) ? [ 'כתובת הדוא"ל אינה תקינה.' ] : [] );
 			const status = this.contact.status;
-			this.contactMessage.toggle( status === 'loading' || status === 'unavailable' );
-			this.contactMessage.setType( status === 'loading' ? 'notice' : 'error' );
-			this.contactMessage.setLabel( status === 'loading' ? 'טוען את טופס יצירת הקשר…' : this.contact.message || '' );
+			const contactMessages = {
+				loading: 'טוען את טופס יצירת הקשר…',
+				challenge: 'מתבצע אימות אבטחה קצר. אם מופיעה למטה תיבת סימון, סמנו אותה.',
+				fallback: 'לא ניתן להשלים את האימות בתוך החלון. בלחיצה על "שליחה" ייפתח טופס יצירת הקשר בלשונית חדשה, ממולא בפרטי הדיווח, ושם יש ללחוץ שוב על "שליחה".',
+				unavailable: this.contact.message || '',
+			};
+			this.contactMessage.toggle( status in contactMessages );
+			this.contactMessage.setType( status === 'unavailable' ? 'error' : 'notice' );
+			this.contactMessage.setLabel( contactMessages[ status ] || '' );
 
 			// הסבר: לאן הדיווח הולך ואיך עוקבים אחריו
 			const page = type ? $link( type.page ).attr( 'target', '_blank' ) : 'הדיווחים המתאים';
@@ -487,6 +526,7 @@
 			this.captcha.clear();
 			this.captcha.setNote( '' );
 			this.editCaptcha = this.contactRequest = null;
+			this.removeChallenge();
 			this.contact = { status: 'idle' };
 			if ( this.anonInput.isSelected() ) {
 				this.loadContactForm();
@@ -509,6 +549,12 @@
 			if ( this.contactRequest !== request ) {
 				return;
 			}
+			if ( contact.status === 'challenge' ) {
+				contact = await this.passChallenge( request );
+				if ( this.contactRequest !== request ) {
+					return;
+				}
+			}
 			this.contact = contact;
 			const captcha = contact.captcha;
 			if ( !captcha ) {
@@ -519,6 +565,51 @@
 				this.captcha.showWidget( captcha.vendor, captcha.key );
 			}
 			this.updateState();
+		};
+
+		/**
+		 * אימות האבטחה של Cloudflare: דף יצירת הקשר נטען במסגרת בתוך החלון, האימות רץ בה,
+		 * ואחריו הדפדפן מקבל אישור מעבר ובקשות הרקע לטופס עוברות.
+		 * אם האימות לא עובר בזמן, עוברים לגיבוי: טופס ממולא מראש בלשונית חדשה.
+		 * הלולאה נעצרת כשהבקשה הוחלפה (ביטול הסימון, סגירת החלון או פתיחה מחדש).
+		 */
+		ReportDialog.prototype.passChallenge = async function ( request ) {
+			const active = () => this.contactRequest === request;
+			this.contact = { status: 'challenge' };
+			this.removeChallenge();
+			this.$challenge = $( '<iframe>' ).addClass( 'hm-report-challenge' )
+				.attr( { src: mw.util.getUrl( contactTitle() ), title: 'אימות אבטחה' } )
+				.insertAfter( this.contactMessage.$element );
+			this.updateState();
+			const deadline = Date.now() + CONFIG.contact.challengeTimeout;
+			let contact = { status: 'fallback' };
+			while ( active() && Date.now() < deadline ) {
+				await new Promise( ( resolve ) => setTimeout( resolve, CONFIG.contact.challengeInterval ) );
+				if ( !active() ) {
+					break;
+				}
+				try {
+					const result = await fetchContactForm();
+					if ( result.status !== 'challenge' ) {
+						contact = result;
+						break;
+					}
+				} catch ( e ) {
+					// שגיאת רשת רגעית: ממשיכים לנסות עד שהזמן נגמר
+				}
+			}
+			if ( active() ) {
+				// אחרי האימות המסגרת עלולה להציג את הסירוב של מדיה-ויקי להיטען במסגרת; היא כבר לא נחוצה
+				this.removeChallenge();
+			}
+			return contact;
+		};
+
+		ReportDialog.prototype.removeChallenge = function () {
+			if ( this.$challenge ) {
+				this.$challenge.remove();
+				this.$challenge = null;
+			}
 		};
 
 		/* שליחה */
@@ -608,6 +699,23 @@
 			const contact = this.contact;
 			const f = CONFIG.contact.fields;
 			const mail = buildEmail( report );
+			if ( contact.status === 'fallback' ) {
+				// נקרא עדיין בתוך הטיפול הסינכרוני בלחיצה (לפני await כלשהו), כך שהדפדפן לא אמור לחסום את הלשונית
+				const url = prefilledContactUrl( mail, report.email );
+				const tab = window.open( url, '_blank' );
+				if ( tab ) {
+					tab.opener = null;
+				}
+				this.showDone( null, [
+					$( '<p>' ).append( $( '<strong>' ).text( 'הדיווח עדיין לא נשלח!' ) ),
+					$( '<p>' ).text( tab ?
+						'טופס יצירת הקשר נפתח בלשונית חדשה, ממולא בפרטי הדיווח. כדי לשלוח את הדיווח, עברו ללשונית ולחצו שם על "שליחה".' :
+						'הדפדפן חסם את פתיחת הלשונית החדשה.' ),
+					$( '<p>' ).append( $msg( tab ? 'אם הלשונית לא נפתחה, ' : 'כדי לשלוח את הדיווח, ',
+						$link( contactTitle(), 'פתחו את הטופס הממולא', url ).attr( 'target', '_blank' ), ' ולחצו שם על "שליחה".' ) ),
+				] );
+				return;
+			}
 			const params = serializeForm( contact.form );
 			params.set( f.subject, mail.subject );
 			params.set( f.text, mail.text );
@@ -633,9 +741,12 @@
 				] );
 				return;
 			}
-			const errors = collectErrors( doc );
-			await this.loadContactForm(); // אסימון וקאפצ'ה חדשים לניסיון הבא
-			throw new OO.ui.Error( errors || 'שליחת הדיווח האנונימי נכשלה.', { recoverable: !contact.captcha } );
+			// טופס, אסימון וקאפצ'ה חדשים לניסיון הבא. לא מחכים: אם נדרש שוב אימות של Cloudflare, הוא מוצג בחלון
+			// והשליחה מושבתת עד שהטופס נטען. הטקסט שהוקלד נשאר בחלון.
+			this.loadContactForm();
+			throw new OO.ui.Error( isChallenge( res, doc ) ?
+				'תוקף אימות האבטחה פג, והדיווח לא נשלח. השלימו את האימות שמופיע בחלון ולחצו שוב על "שליחה".' :
+				collectErrors( doc ) || 'שליחת הדיווח האנונימי נכשלה.', { recoverable: false } );
 		};
 
 		ReportDialog.prototype.showDone = function ( trackUrl, content ) {
